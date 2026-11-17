@@ -27,37 +27,53 @@ func main() {
 	url := srv.URL()
 	log.Printf("QuickNetScan running at %s", url)
 
-	// Launch Edge/Chrome in app mode, or open default browser
+	// Launch dedicated standalone app window
+	exitChan := make(chan struct{})
 	go func() {
-		time.Sleep(200 * time.Millisecond)
-		openGUI(url)
+		time.Sleep(150 * time.Millisecond)
+		openGUI(url, exitChan)
 	}()
 
-	// Wait for interrupt
+	// Wait for window close or OS interrupt
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-	<-sigChan
+
+	select {
+	case <-sigChan:
+	case <-exitChan:
+	}
 
 	log.Println("Shutting down QuickNetScan...")
 	_ = srv.Close()
 }
 
-func openGUI(url string) {
+func openGUI(url string, exitChan chan struct{}) {
 	if runtime.GOOS == "windows" {
-		// Try Microsoft Edge in standalone app window mode
-		msedgePaths := []string{
+		candidates := []string{
+			os.ExpandEnv(`%ProgramFiles%\Google\Chrome\Application\chrome.exe`),
+			os.ExpandEnv(`%ProgramFiles(x86)%\Google\Chrome\Application\chrome.exe`),
 			os.ExpandEnv(`%ProgramFiles(x86)%\Microsoft\Edge\Application\msedge.exe`),
 			os.ExpandEnv(`%ProgramFiles%\Microsoft\Edge\Application\msedge.exe`),
 		}
-		for _, path := range msedgePaths {
+
+		appArgs := []string{
+			fmt.Sprintf("--app=%s", url),
+			"--window-size=1080,750",
+			"--user-data-dir=" + os.TempDir() + "\\quicknetscan_profile",
+		}
+
+		for _, path := range candidates {
 			if _, err := os.Stat(path); err == nil {
-				cmd := exec.Command(path, fmt.Sprintf("--app=%s", url), "--window-size=1024,720")
+				cmd := exec.Command(path, appArgs...)
 				if err := cmd.Start(); err == nil {
+					_ = cmd.Wait()
+					close(exitChan)
 					return
 				}
 			}
 		}
-		// Fallback to default browser
+
+		// Fallback
 		_ = exec.Command("cmd", "/c", "start", url).Start()
 	}
 }

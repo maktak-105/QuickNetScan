@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -163,14 +164,20 @@ func GenerateIPsFromCIDR(cidrStr string) ([]string, error) {
 		return nil, err
 	}
 
-	var ips []string
+	ip4 := ipNet.IP.To4()
+	if ip4 == nil {
+		return nil, fmt.Errorf("only IPv4 is supported: %s", cidrStr)
+	}
+
 	mask := binary.BigEndian.Uint32(ipNet.Mask)
-	start := binary.BigEndian.Uint32(ipNet.IP)
+	start := binary.BigEndian.Uint32(ip4)
 
 	// network address to broadcast address
-	finish := (start & mask) | (mask ^ 0xffffffff)
+	network := start & mask
+	broadcast := network | (^mask)
 
-	for i := start + 1; i < finish; i++ {
+	var ips []string
+	for i := network + 1; i < broadcast; i++ {
 		ip := make(net.IP, 4)
 		binary.BigEndian.PutUint32(ip, i)
 		ips = append(ips, ip.String())

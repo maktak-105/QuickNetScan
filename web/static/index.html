@@ -11,15 +11,14 @@
     <!-- Header -->
     <header class="app-header">
       <div class="header-left">
-        <div class="app-logo">⚡</div>
+        <img src="assets/QuickNetScan-icon.svg" alt="QuickNetScan Logo" class="app-logo-img">
         <h1 class="app-title">QuickNetScan</h1>
         <span class="app-subtitle" data-i18n="subtitle">高速LANスキャナー (Go+Goroutines)</span>
       </div>
       <div class="header-right">
         <!-- Language Switcher Pill -->
         <button id="langToggleBtn" class="pill-btn" title="Switch Language / 言語切替">
-          <span class="globe-icon">🌐</span>
-          <span id="currentLangLabel">日本語</span>
+          <span id="currentLangLabel">🌐 English</span>
         </button>
         <button id="exportBtn" class="secondary-btn" data-i18n="export">エクスポート</button>
         <button id="aboutBtn" class="icon-btn" title="About / バージョン情報">ℹ️</button>
@@ -29,17 +28,22 @@
     <!-- Controls -->
     <section class="control-panel">
       <div class="control-row">
-        <div class="field-group">
-          <label for="targetCidr" data-i18n="target_range">スキャン対象 (CIDR / 範囲):</label>
-          <div class="input-with-button">
-            <input type="text" id="targetCidr" value="192.168.1.0/24" placeholder="例: 192.168.1.0/24">
-            <button id="detectSubnetBtn" class="secondary-btn" data-i18n="auto_detect">自サブネット検出</button>
-          </div>
+        <div class="field-group subnet-group">
+          <label for="subnetSelect" data-i18n="target_network">接続先ネットワーク:</label>
+          <select id="subnetSelect" class="dark-select">
+            <option value="" data-i18n="detecting">検出中...</option>
+          </select>
         </div>
 
         <div class="field-group">
-          <label for="concurrencyRange" data-i18n="concurrency">並行 Goroutine 数: <span id="concurrencyVal">256</span></label>
+          <label for="targetCidr" data-i18n="target_cidr">スキャンCIDR:</label>
+          <input type="text" id="targetCidr" value="192.168.1.0/24" placeholder="例: 192.168.1.0/24">
+        </div>
+
+        <div class="field-group concurrency-group">
+          <label for="concurrencyRange"><span data-i18n="concurrency_label">並行数</span>:</label>
           <input type="range" id="concurrencyRange" min="32" max="1024" step="32" value="256">
+          <span id="concurrencyBadge" class="num-badge">256</span>
         </div>
       </div>
 
@@ -106,7 +110,7 @@
       </div>
       <div class="modal-body">
         <div class="badge-container">
-          <img src="/assets/maktak105-V04-01.jpg" alt="Author Badge" class="author-badge">
+          <img src="assets/maktak105-V04-01.jpg" alt="Author Badge" class="author-badge">
         </div>
         <h3 class="app-name-large">QuickNetScan</h3>
         <p class="app-version">Version 1.0.0</p>
@@ -127,6 +131,7 @@
 
   <!-- Scripts -->
   <script src="js/wasm_exec.js"></script>
+  <script src="js/wasm_data.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

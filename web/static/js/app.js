@@ -3,11 +3,13 @@
 const i18nData = {
   ja: {
     subtitle: "高速LANスキャナー (Go+Goroutines)",
-    lang_label: "日本語",
+    lang_btn_text: "🌐 English",
     export: "エクスポート",
-    target_range: "スキャン対象 (CIDR / 範囲):",
-    auto_detect: "自サブネット検出",
-    concurrency: "並行 Goroutine 数:",
+    target_network: "接続先ネットワーク:",
+    target_cidr: "スキャンCIDR:",
+    concurrency_label: "並行数",
+    detecting: "検出中...",
+    custom_option: "手動指定 / カスタム",
     enable_port_scan: "ポートスキャンを実行",
     start_scan: "スキャン開始",
     stop_scan: "停止",
@@ -30,11 +32,13 @@ const i18nData = {
   },
   en: {
     subtitle: "High-speed LAN Scanner (Go+Goroutines)",
-    lang_label: "English",
+    lang_btn_text: "🌐 日本語",
     export: "Export",
-    target_range: "Target Range (CIDR):",
-    auto_detect: "Detect Subnet",
-    concurrency: "Concurrent Goroutines:",
+    target_network: "Network Adapter:",
+    target_cidr: "Target CIDR:",
+    concurrency_label: "Concurrency",
+    detecting: "Detecting...",
+    custom_option: "Custom Range / Manual",
     enable_port_scan: "Enable Port Scan",
     start_scan: "Start Scan",
     stop_scan: "Stop",
@@ -63,25 +67,72 @@ let scanStartTime = null;
 let timerInterval = null;
 let foundHosts = [];
 
+let isWasmReady = false;
+
 document.addEventListener("DOMContentLoaded", () => {
-  initWasm();
   setupLanguage();
   setupUIEvents();
-  detectLocalSubnet();
+  initWasm();
+  setupNativeBridge();
 });
 
+window.onWasmReady = () => {
+  isWasmReady = true;
+  console.log("Go WASM GUI engine ready!");
+};
+
 async function initWasm() {
-  if (typeof Go === "undefined") {
-    console.warn("Go WASM runtime (wasm_exec.js) not loaded.");
+  if (typeof Go === "undefined" || typeof GO_WASM_BASE64 === "undefined") {
+    console.warn("Go WASM runtime or embedded binary not found.");
     return;
   }
   try {
+    const binaryString = atob(GO_WASM_BASE64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) {
+      bytes[i] = binaryString.charCodeAt(i);
+    }
     const go = new Go();
-    const result = await WebAssembly.instantiateStreaming(fetch("app.wasm"), go.importObject);
+    const result = await WebAssembly.instantiate(bytes.buffer, go.importObject);
     go.run(result.instance);
-    console.log("WASM loaded successfully.");
+    console.log("Go WASM loaded directly from embedded memory (No HTTP server required).");
   } catch (err) {
-    console.info("WASM binary not found or fallback to JS:", err.message);
+    console.error("Failed to initialize Go WASM from memory:", err);
+  }
+}
+
+function setupNativeBridge() {
+  if (window.chrome && window.chrome.webview) {
+    window.chrome.webview.addEventListener("message", (event) => {
+      handleNativeMessage(event.data);
+    });
+    // Request subnets immediately
+    window.chrome.webview.postMessage({ cmd: "get_subnets" });
+  } else {
+    // Browser fallback
+    detectLocalSubnet();
+  }
+}
+
+function handleNativeMessage(data) {
+  let msg = data;
+  if (typeof msg === "string") {
+    try { msg = JSON.parse(msg); } catch (_) {}
+  }
+  if (!msg) return;
+
+  switch (msg.cmd) {
+    case "subnets_result":
+      populateSubnets(msg.subnets);
+      break;
+
+    case "progress":
+      handleProgressUpdate(msg.data);
+      break;
+
+    case "scan_complete":
+      completeScan(false);
+      break;
   }
 }
 
@@ -96,7 +147,7 @@ function setupLanguage() {
 
 function applyLanguage(lang) {
   const texts = i18nData[lang];
-  document.getElementById("currentLangLabel").textContent = texts.lang_label;
+  document.getElementById("currentLangLabel").textContent = texts.lang_btn_text;
 
   document.querySelectorAll("[data-i18n]").forEach(el => {
     const key = el.getAttribute("data-i18n");
@@ -108,12 +159,19 @@ function applyLanguage(lang) {
 
 function setupUIEvents() {
   const concurrencyRange = document.getElementById("concurrencyRange");
-  const concurrencyVal = document.getElementById("concurrencyVal");
+  const concurrencyBadge = document.getElementById("concurrencyBadge");
   concurrencyRange.addEventListener("input", (e) => {
-    concurrencyVal.textContent = e.target.value;
+    concurrencyBadge.textContent = e.target.value;
   });
 
-  document.getElementById("detectSubnetBtn").addEventListener("click", detectLocalSubnet);
+  const subnetSelect = document.getElementById("subnetSelect");
+  const targetCidr = document.getElementById("targetCidr");
+  subnetSelect.addEventListener("change", (e) => {
+    if (e.target.value) {
+      targetCidr.value = e.target.value;
+    }
+  });
+
   document.getElementById("startScanBtn").addEventListener("click", startScan);
   document.getElementById("stopScanBtn").addEventListener("click", stopScan);
   document.getElementById("exportBtn").addEventListener("click", exportCSV);
@@ -135,16 +193,62 @@ function setupUIEvents() {
 }
 
 async function detectLocalSubnet() {
+  const select = document.getElementById("subnetSelect");
+  const targetCidr = document.getElementById("targetCidr");
+
   try {
     const res = await fetch("/api/local-subnets");
     if (res.ok) {
       const data = await res.json();
+      select.innerHTML = "";
+
       if (data.subnets && data.subnets.length > 0) {
-        document.getElementById("targetCidr").value = data.subnets[0];
+        data.subnets.forEach((sub, idx) => {
+          const opt = document.createElement("option");
+          opt.value = sub.cidr;
+          opt.textContent = sub.label;
+          if (idx === 0) {
+            opt.selected = true;
+            targetCidr.value = sub.cidr;
+          }
+          select.appendChild(opt);
+        });
+
+        // Add custom option
+        const customOpt = document.createElement("option");
+        customOpt.value = "";
+        customOpt.textContent = i18nData[currentLang].custom_option;
+        select.appendChild(customOpt);
+      } else {
+        select.innerHTML = `<option value="">${i18nData[currentLang].custom_option}</option>`;
       }
     }
   } catch (err) {
     console.warn("Could not auto-detect subnet:", err);
+  }
+}
+
+function populateSubnets(subnets) {
+  const select = document.getElementById("subnetSelect");
+  const targetCidr = document.getElementById("targetCidr");
+  select.innerHTML = "";
+
+  if (subnets && subnets.length > 0) {
+    subnets.forEach((sub, idx) => {
+      const opt = document.createElement("option");
+      opt.value = sub.cidr;
+      opt.textContent = sub.label;
+      if (idx === 0) {
+        opt.selected = true;
+        targetCidr.value = sub.cidr;
+      }
+      select.appendChild(opt);
+    });
+
+    const customOpt = document.createElement("option");
+    customOpt.value = "";
+    customOpt.textContent = i18nData[currentLang].custom_option;
+    select.appendChild(customOpt);
   }
 }
 
@@ -169,10 +273,22 @@ async function startScan() {
 
   setScanningState(true);
   scanStartTime = Date.now();
+  if (timerInterval) clearInterval(timerInterval);
   timerInterval = setInterval(updateTimer, 100);
 
-  connectEventSource();
+  // Send to native WebView2 if available
+  if (window.chrome && window.chrome.webview) {
+    window.chrome.webview.postMessage({
+      cmd: "start_scan",
+      target_cidr: targetCidr,
+      concurrency: concurrency,
+      scan_ports: scanPorts,
+      ports: ports
+    });
+    return;
+  }
 
+  // HTTP Fallback (if any)
   try {
     const res = await fetch("/api/scan/start", {
       method: "POST",
@@ -188,47 +304,61 @@ async function startScan() {
       const err = await res.text();
       alert("スキャン開始エラー: " + err);
       stopScan();
+      return;
+    }
+    const data = await res.json();
+    if (data.total_targets) {
+      document.getElementById("progressCount").textContent = `0 / ${data.total_targets}`;
     }
   } catch (err) {
-    alert("サーバー通信エラー: " + err);
+    alert("通信エラー: " + err);
     stopScan();
   }
 }
 
-function connectEventSource() {
-  if (eventSource) {
-    eventSource.close();
+async function stopScan() {
+  if (window.chrome && window.chrome.webview) {
+    window.chrome.webview.postMessage({ cmd: "stop_scan" });
+  } else {
+    try { await fetch("/api/scan/stop"); } catch (_) {}
   }
-  eventSource = new EventSource("/api/scan/events");
-
-  eventSource.onmessage = (e) => {
-    const update = JSON.parse(e.data);
-    handleProgressUpdate(update);
-  };
-
-  eventSource.onerror = () => {
-    if (eventSource) {
-      eventSource.close();
-      eventSource = null;
-    }
-  };
+  completeScan(true);
 }
 
 function handleProgressUpdate(update) {
-  if (update.total_targets > 0) {
-    const percent = Math.min(100, Math.round((update.scanned_count / update.total_targets) * 100));
-    document.getElementById("progressBar").style.width = percent + "%";
-    document.getElementById("progressCount").textContent = `${update.scanned_count} / ${update.total_targets}`;
+  if (!update) return;
+
+  // Let Go WASM update the progress bar and counter
+  if (window.wasmUpdateProgress) {
+    try {
+      window.wasmUpdateProgress(update.scanned_count, update.total_targets);
+    } catch (_) {}
+  } else {
+    if (update.total_targets > 0) {
+      const percent = Math.min(100, Math.round((update.scanned_count / update.total_targets) * 100));
+      document.getElementById("progressBar").style.width = percent + "%";
+      document.getElementById("progressCount").textContent = `${update.scanned_count} / ${update.total_targets}`;
+    }
   }
 
   document.getElementById("foundCount").textContent = update.found_count;
 
+  // Let Go WASM render the new host row in DOM
   if (update.latest_host && update.latest_host.is_alive) {
-    addHostRow(update.latest_host);
+    foundHosts.push(update.latest_host);
+    if (window.wasmAddHostRow) {
+      try {
+        window.wasmAddHostRow(update.latest_host);
+      } catch (err) {
+        addHostRow(update.latest_host);
+      }
+    } else {
+      addHostRow(update.latest_host);
+    }
   }
 
   if (update.is_complete) {
-    completeScan();
+    completeScan(false);
   }
 }
 
@@ -271,10 +401,6 @@ function completeScan(stopped = false) {
   if (timerInterval) {
     clearInterval(timerInterval);
     timerInterval = null;
-  }
-  if (eventSource) {
-    eventSource.close();
-    eventSource = null;
   }
   document.getElementById("scanStatusText").textContent = stopped
     ? i18nData[currentLang].status_stopped
