@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QuickNetScan</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body class="dark-theme">
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <div class="app-logo">⚡</div>
+        <h1 class="app-title">QuickNetScan</h1>
+        <span class="app-subtitle" data-i18n="subtitle">高速LANスキャナー (Go+Goroutines)</span>
+      </div>
+      <div class="header-right">
+        <!-- Language Switcher Pill -->
+        <button id="langToggleBtn" class="pill-btn" title="Switch Language / 言語切替">
+          <span class="globe-icon">🌐</span>
+          <span id="currentLangLabel">日本語</span>
+        </button>
+        <button id="exportBtn" class="secondary-btn" data-i18n="export">エクスポート</button>
+        <button id="aboutBtn" class="icon-btn" title="About / バージョン情報">ℹ️</button>
+      </div>
+    </header>
+
+    <!-- Controls -->
+    <section class="control-panel">
+      <div class="control-row">
+        <div class="field-group">
+          <label for="targetCidr" data-i18n="target_range">スキャン対象 (CIDR / 範囲):</label>
+          <div class="input-with-button">
+            <input type="text" id="targetCidr" value="192.168.1.0/24" placeholder="例: 192.168.1.0/24">
+            <button id="detectSubnetBtn" class="secondary-btn" data-i18n="auto_detect">自サブネット検出</button>
+          </div>
+        </div>
+
+        <div class="field-group">
+          <label for="concurrencyRange" data-i18n="concurrency">並行 Goroutine 数: <span id="concurrencyVal">256</span></label>
+          <input type="range" id="concurrencyRange" min="32" max="1024" step="32" value="256">
+        </div>
+      </div>
+
+      <div class="control-row">
+        <div class="field-group port-group">
+          <label>
+            <input type="checkbox" id="scanPortsCheckbox" checked>
+            <span data-i18n="enable_port_scan">ポートスキャンを実行</span>
+          </label>
+          <input type="text" id="portListInput" value="22, 80, 443, 445, 3389, 8080" placeholder="ポート番号 (カンマ区切り)">
+        </div>
+
+        <div class="action-buttons">
+          <button id="startScanBtn" class="primary-btn" data-i18n="start_scan">スキャン開始</button>
+          <button id="stopScanBtn" class="danger-btn" disabled data-i18n="stop_scan">停止</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Main Content Table -->
+    <main class="main-content">
+      <div class="table-container">
+        <table id="resultsTable">
+          <thead>
+            <tr>
+              <th data-i18n="col_status">状態</th>
+              <th data-i18n="col_ip">IP アドレス</th>
+              <th data-i18n="col_mac">MAC アドレス</th>
+              <th data-i18n="col_ports">開放ポート</th>
+              <th data-i18n="col_rtt">応答速度</th>
+            </tr>
+          </thead>
+          <tbody id="resultsBody">
+            <tr class="empty-row">
+              <td colspan="5" data-i18n="empty_state">スキャンを開始すると検出された機器がここに表示されます</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+
+    <!-- Status Bar -->
+    <footer class="status-bar">
+      <div class="status-left">
+        <span id="scanStatusText" data-i18n="status_ready">待機中</span>
+        <div class="progress-bar-container">
+          <div id="progressBar" class="progress-bar"></div>
+        </div>
+      </div>
+      <div class="status-right">
+        <span data-i18n="found_count">検出:</span> <strong id="foundCount">0</strong> 台 |
+        <span data-i18n="progress_count">進捗:</span> <span id="progressCount">0 / 0</span> |
+        <span data-i18n="elapsed">経過時間:</span> <span id="elapsedTime">0.0s</span>
+      </div>
+    </footer>
+  </div>
+
+  <!-- About Modal -->
+  <div id="aboutModal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <div class="modal-header">
+        <h2 data-i18n="about_title">バージョン情報</h2>
+        <button id="closeModalBtn" class="close-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="badge-container">
+          <img src="/assets/maktak105-V04-01.jpg" alt="Author Badge" class="author-badge">
+        </div>
+        <h3 class="app-name-large">QuickNetScan</h3>
+        <p class="app-version">Version 1.0.0</p>
+        <p class="app-desc" data-i18n="about_desc">
+          自宅LANや社内LANのIPレンジを、Goの得意な並行処理（Goroutine）で数百スレッド同時に一瞬でスキャンし、生きている機器のIP・MACアドレス・空いているポート・応答速度を即座に一覧表示する単一EXE。
+        </p>
+        <div class="tech-stack-info">
+          <p><strong>Architecture:</strong> Go 1.22 + WebAssembly (WASM) + HTML5/CSS3</p>
+          <p><strong>Author:</strong> maktak-105</p>
+          <p><strong>License:</strong> MIT License</p>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="aboutOkBtn" class="primary-btn" data-i18n="ok">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="js/wasm_exec.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

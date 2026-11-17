@@ -1,0 +1,8 @@
+QuickNetScan Change Log
+
+1.0.0 (2026-11-17)
+- Initial public release
+- Fast multi-threaded network scanning across LAN subnets
+- Displays IP, MAC address, open ports, and latency
+- Single executable with embedded WASM user interface
+- Bilingual UI (English / Japanese)

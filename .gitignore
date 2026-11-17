@@ -1,0 +1,44 @@
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+
+# WASM build intermediate
+build/intermediate/
+*.wasm
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.env
+
+# Logs and temp files
+*.log
+*.dat
+*_debug.log
+
+# Editors
+.vscode/
+.idea/
+
+# Scripts virtualenv
+scripts/.venv/
+
+# Dist: only track .gitkeep
+dist/*
+!dist/.gitkeep
+
+# Docs distribution: do NOT ignore!
+# docs/distribution is tracked in Git
+
+# AI tools and notes
+CODEX_PROJECT_NOTE.txt

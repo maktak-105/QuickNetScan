@@ -1,0 +1,89 @@
+name: Build and upload distribution asset
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing release tag to update, for example v1.0.0'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          check-latest: true
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build applications
+        shell: pwsh
+        run: |
+          python scripts/build.py
+          if ($LASTEXITCODE -ne 0) { throw 'Application build failed' }
+
+      - name: Package distribution files
+        shell: pwsh
+        run: |
+          $files = @(
+            'dist/QuickNetScan.exe',
+            'dist/QuickNetScan_cli.exe',
+            'docs/distribution/readme.txt',
+            'docs/distribution/readme_jp.txt',
+            'docs/distribution/history.txt',
+            'docs/distribution/history_jp.txt',
+            'docs/distribution/LICENSE.txt',
+            'docs/distribution/LICENSE_jp.txt'
+          )
+          foreach ($file in $files) {
+            if (!(Test-Path -LiteralPath $file)) { throw "Missing distribution file: $file" }
+          }
+          $staging = Join-Path $env:RUNNER_TEMP 'QuickNetScan-package'
+          New-Item -ItemType Directory -Path $staging -Force | Out-Null
+          foreach ($file in $files) {
+            Copy-Item -LiteralPath $file -Destination $staging -Force
+          }
+          Compress-Archive -Path (Join-Path $staging '*') -DestinationPath (Join-Path $env:GITHUB_WORKSPACE 'QuickNetScan-binary.zip') -Force
+
+      - name: Compute SHA-256 checksums
+        shell: pwsh
+        run: |
+          $lines = [System.Collections.Generic.List[string]]::new()
+          $zipPath = Join-Path $env:GITHUB_WORKSPACE 'QuickNetScan-binary.zip'
+          $h = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
+          $lines.Add("$h  QuickNetScan-binary.zip")
+
+          $binaries = @('dist/QuickNetScan.exe', 'dist/QuickNetScan_cli.exe')
+          foreach ($bin in $binaries) {
+            if (Test-Path -LiteralPath $bin) {
+              $h = (Get-FileHash -LiteralPath $bin -Algorithm SHA256).Hash.ToLowerInvariant()
+              $leaf = Split-Path -Leaf $bin
+              $lines.Add("$h  $leaf")
+            }
+          }
+          Set-Content -LiteralPath (Join-Path $env:GITHUB_WORKSPACE 'SHA256SUMS.txt') -Value $lines -Encoding utf8 -NoNewline:$false
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          files: |
+            QuickNetScan-binary.zip
+            SHA256SUMS.txt
