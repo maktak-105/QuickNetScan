@@ -252,6 +252,25 @@ input[type="range"] {
   overflow: auto;
 }
 
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1a1a1d;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #3e3e46;
+  border-radius: 5px;
+  border: 2px solid #1a1a1d;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #52525c;
+}
+
 table {
   width: 100%;
   border-collapse: collapse;
