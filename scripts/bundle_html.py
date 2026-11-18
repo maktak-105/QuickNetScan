@@ -2,11 +2,10 @@
 # -*- coding: utf-8 -*-
 """
 HTML Bundler for QuickNetScan
-Embeds CSS, JS, Images, and Go WASM into a single self-contained HTML file.
+Embeds CSS, JS, and Images into a single self-contained HTML file.
 """
 
 import base64
-import os
 import re
 from pathlib import Path
 
@@ -20,14 +19,14 @@ def bundle(output_dir):
     with open(index_html, "r", encoding="utf-8") as f:
         html = f.read()
 
-    # Inline CSS
+    # Inline CSS (use lambda to prevent re.sub from interpreting backslashes)
     css_path = STATIC_DIR / "css" / "style.css"
     if css_path.exists():
         with open(css_path, "r", encoding="utf-8") as f:
             css_content = f.read()
         html = re.sub(
             r'<link\s+rel="stylesheet"\s+href="css/style\.css"[^>]*>',
-            f"<style>\n{css_content}\n</style>",
+            lambda _: f"<style>\n{css_content}\n</style>",
             html
         )
 
@@ -46,7 +45,7 @@ def bundle(output_dir):
         html = html.replace('src="assets/QuickNetScan-icon.svg"', f'src="data:image/svg+xml;base64,{b64_logo}"')
 
     # Inline JS scripts in order
-    js_files = ["wasm_exec.js", "wasm_data.js", "app.js"]
+    js_files = ["wasm_exec.js", "app.js"]
     scripts_content = []
     for js_name in js_files:
         js_path = STATIC_DIR / "js" / js_name
@@ -62,7 +61,7 @@ def bundle(output_dir):
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
 
-    print(f"[Bundle] Created self-contained HTML: {out_path} ({len(html)/(1024*1024):.2f} MB)")
+    print(f"[Bundle] Created self-contained HTML: {out_path} ({len(html)/1024:.1f} KB)")
     return str(out_path)
 
 if __name__ == "__main__":

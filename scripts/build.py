@@ -6,7 +6,7 @@ Builds:
 1. Go WASM binary embedded into JS (Zero HTTP Server)
 2. Go Concurrent Engine DLL (c-shared)
 3. Self-contained bundled HTML
-4. Windows Resource (.rc)
+4. Windows Resource (.rc) embedding HTML + Go Engine DLL + WebView2Loader DLL
 5. Native Win32 + WebView2 Desktop Application (QuickNetScan.exe)
 6. CLI Executable (QuickNetScan_cli.exe)
 """
@@ -54,6 +54,21 @@ def find_windres(gxx_path):
                 return c
     return shutil.which("windres") or shutil.which("llvm-windres")
 
+def find_webview2_loader(webview_inc):
+    env_loader = os.environ.get("WEBVIEW2_LOADER")
+    if env_loader and os.path.exists(env_loader):
+        return env_loader
+    candidates = [
+        os.path.join(os.path.dirname(webview_inc), "x64", "WebView2Loader.dll"),
+        r"C:\tools\webview2\build\native\x64\WebView2Loader.dll",
+        r"C:\tools\webview2\runtimes\win-x64\native\WebView2Loader.dll",
+        str(DIST_DIR / "WebView2Loader.dll"),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return None
+
 def main():
     print("========================================")
     print("      QuickNetScan Native Build         ")
@@ -75,21 +90,34 @@ def main():
 
     # 2. Build Go Engine DLL (Goroutines)
     print("\n[2/6] Building Go Concurrent Engine DLL (engine_x64.dll)...")
+    inter_dll = INTER_DIR / "engine_x64.dll"
     out_dll = DIST_DIR / "engine_x64.dll"
-    cmd_dll = [go_bin, "build", "-trimpath", "-buildmode=c-shared", "-ldflags", "-s -w", "-o", str(out_dll), "./cmd/engine-dll"]
+    cmd_dll = [go_bin, "build", "-trimpath", "-buildmode=c-shared", "-ldflags", "-s -w", "-o", str(inter_dll), "./cmd/engine-dll"]
     res = subprocess.run(cmd_dll, cwd=ROOT_DIR)
     if res.returncode != 0:
         print("[ERROR] Go Engine DLL build failed")
         sys.exit(res.returncode)
 
-    # Copy DLL to core/native as well
+    shutil.copy2(inter_dll, out_dll)
+    inter_hdr = INTER_DIR / "engine_x64.h"
     core_native = ROOT_DIR / "core" / "native"
     core_native.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(out_dll, core_native / "engine_x64.dll")
+    if inter_hdr.exists():
+        shutil.copy2(inter_hdr, core_native / "engine_x64.h")
+
+    # Prepare WebView2Loader.dll in intermediate and dist
+    webview_inc = os.environ.get("WEBVIEW2_INCLUDE", r"C:\tools\webview2\build\native\include")
+    wv_loader = find_webview2_loader(webview_inc)
+    if not wv_loader:
+        print("[ERROR] WebView2Loader.dll not found")
+        sys.exit(1)
+    shutil.copy2(wv_loader, INTER_DIR / "WebView2Loader.dll")
+    if os.path.abspath(wv_loader) != os.path.abspath(str(DIST_DIR / "WebView2Loader.dll")):
+        shutil.copy2(wv_loader, DIST_DIR / "WebView2Loader.dll")
 
     # 3. Bundle HTML into self-contained file
     print("\n[3/6] Bundling HTML/CSS/JS/WASM/Assets into single HTML...")
-    bundled_html = bundle_html.bundle(INTER_DIR)
+    bundle_html.bundle(INTER_DIR)
 
     # 4. Compile Resource (.rc)
     print("\n[4/6] Compiling Windows Resource (.rc)...")
@@ -112,7 +140,6 @@ def main():
 
     # 5. Compile Native Desktop GUI (Win32 + WebView2)
     print("\n[5/6] Compiling Native Desktop Application (QuickNetScan.exe)...")
-    webview_inc = os.environ.get("WEBVIEW2_INCLUDE", r"C:\tools\webview2\build\native\include")
     gui_src = SRC_DIR / "app" / "main_gui.cpp"
     gui_out = DIST_DIR / "QuickNetScan.exe"
 
@@ -140,21 +167,18 @@ def main():
         print("[ERROR] CLI build failed")
         sys.exit(res.returncode)
 
-    # 7. Copy web assets to dist/web for Virtual Host Mapping
-    print("\n[7/7] Preparing dist/web for Native Virtual Host Mapping...")
+    # Clean up obsolete dist/web and dist/engine_x64.h if present
     dist_web = DIST_DIR / "web"
     if dist_web.exists():
         shutil.rmtree(dist_web)
-    shutil.copytree(ROOT_DIR / "web" / "static", dist_web)
-    # Ensure app.wasm is copied to dist/web
-    wasm_inter = INTER_DIR / "app.wasm"
-    if wasm_inter.exists():
-        shutil.copy2(wasm_inter, dist_web / "app.wasm")
+    dist_hdr = DIST_DIR / "engine_x64.h"
+    if dist_hdr.exists():
+        dist_hdr.unlink()
 
     print("\n========================================")
     print("      BUILD SUCCESSFUL (ZERO HTTP)      ")
     print("========================================")
-    print(f"GUI: {gui_out}")
+    print(f"GUI: {gui_out} ({gui_out.stat().st_size / (1024*1024):.2f} MB)")
     print(f"DLL: {out_dll}")
     print(f"CLI: {cli_out}")
 

@@ -35,3 +35,13 @@ type ProgressUpdate struct {
 	LatestHost   *HostResult `json:"latest_host,omitempty"`
 	IsComplete   bool        `json:"is_complete"`
 }
+
+// SubnetInfo represents a detected local network interface subnet.
+type SubnetInfo struct {
+	Name      string `json:"name"`
+	IP        string `json:"ip"`
+	CIDR      string `json:"cidr"`
+	Label     string `json:"label"`
+	IsDefault bool   `json:"is_default"`
+	Priority  int    `json:"priority"`
+}

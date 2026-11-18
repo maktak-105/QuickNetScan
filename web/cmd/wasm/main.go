@@ -3,14 +3,17 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
+	"net"
+	"strconv"
 	"syscall/js"
 )
 
 var document js.Value
 
 func main() {
-	c := make(chan struct{}, 0)
+	c := make(chan struct{})
 	document = js.Global().Get("document")
 
 	fmt.Println("QuickNetScan: Go WASM GUI Engine Initialized")
@@ -22,25 +25,37 @@ func main() {
 	js.Global().Set("wasmFormatRTT", js.FuncOf(formatRTT))
 
 	// Signal to JS that WASM is ready
-	js.Global().Call("onWasmReady")
+	if !js.Global().Get("onWasmReady").IsUndefined() {
+		js.Global().Call("onWasmReady")
+	}
 
 	<-c
 }
 
 func initGUI(this js.Value, args []js.Value) interface{} {
-	fmt.Println("Go WASM: GUI Initialized")
 	return true
+}
+
+func formatRTTString(rttMs float64) string {
+	if rttMs < 1.0 {
+		return fmt.Sprintf("%.2f ms", rttMs)
+	}
+	return fmt.Sprintf("%.1f ms", rttMs)
 }
 
 func formatRTT(this js.Value, args []js.Value) interface{} {
 	if len(args) == 0 {
 		return "0.0 ms"
 	}
-	rttMs := args[0].Float()
-	if rttMs < 1.0 {
-		return fmt.Sprintf("%.2f ms", rttMs)
+	return formatRTTString(args[0].Float())
+}
+
+func ipToUint32(ipStr string) uint32 {
+	ip := net.ParseIP(ipStr).To4()
+	if ip == nil {
+		return 0
 	}
-	return fmt.Sprintf("%.1f ms", rttMs)
+	return binary.BigEndian.Uint32(ip)
 }
 
 func addHostRow(this js.Value, args []js.Value) interface{} {
@@ -57,7 +72,10 @@ func addHostRow(this js.Value, args []js.Value) interface{} {
 		return nil
 	}
 
+	ipNum := ipToUint32(ip)
 	tr := document.Call("createElement", "tr")
+	tr.Call("setAttribute", "data-ip", ip)
+	tr.Call("setAttribute", "data-ip-num", strconv.FormatUint(uint64(ipNum), 10))
 
 	// Status cell
 	tdStatus := document.Call("createElement", "td")
@@ -105,10 +123,34 @@ func addHostRow(this js.Value, args []js.Value) interface{} {
 
 	// Latency cell
 	tdRTT := document.Call("createElement", "td")
-	tdRTT.Set("textContent", fmt.Sprintf("%.1f ms", rttMs))
+	tdRTT.Set("textContent", formatRTTString(rttMs))
 	tr.Call("appendChild", tdRTT)
 
-	tbody.Call("appendChild", tr)
+	// Insert sorted by IPv4 numerical order
+	children := tbody.Get("children")
+	length := children.Get("length").Int()
+	inserted := false
+	for i := 0; i < length; i++ {
+		child := children.Call("item", i)
+		existingIP := child.Call("getAttribute", "data-ip")
+		if !existingIP.IsNull() && existingIP.String() == ip {
+			tbody.Call("replaceChild", tr, child)
+			inserted = true
+			break
+		}
+		attrVal := child.Call("getAttribute", "data-ip-num")
+		if !attrVal.IsNull() && attrVal.String() != "" {
+			otherNum, err := strconv.ParseUint(attrVal.String(), 10, 32)
+			if err == nil && uint32(otherNum) > ipNum {
+				tbody.Call("insertBefore", tr, child)
+				inserted = true
+				break
+			}
+		}
+	}
+	if !inserted {
+		tbody.Call("appendChild", tr)
+	}
 	return true
 }
 
@@ -127,10 +169,10 @@ func updateProgress(this js.Value, args []js.Value) interface{} {
 		if pct > 100 {
 			pct = 100
 		}
-		if !progressBar.IsNull() {
+		if !progressBar.IsNull() && !progressBar.IsUndefined() {
 			progressBar.Get("style").Set("width", fmt.Sprintf("%d%%", pct))
 		}
-		if !progressCount.IsNull() {
+		if !progressCount.IsNull() && !progressCount.IsUndefined() {
 			progressCount.Set("textContent", fmt.Sprintf("%d / %d", scanned, total))
 		}
 	}

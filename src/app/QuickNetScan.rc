@@ -2,9 +2,18 @@
 
 #define IDI_ICON1 101
 #define IDR_INDEX_HTML 201
+#define IDR_ENGINE_DLL 202
+#define IDR_WV2_LOADER 203
+#define IDR_APP_WASM   204
 
-// Embedded self-contained HTML
+// Application Icon
+IDI_ICON1 ICON "QuickNetScan.ico"
+
+// Embedded self-contained HTML, Go WASM binary, Go Engine DLL, and WebView2Loader DLL
 IDR_INDEX_HTML RCDATA "../../build/intermediate/index_embed.html"
+IDR_ENGINE_DLL RCDATA "../../build/intermediate/engine_x64.dll"
+IDR_WV2_LOADER RCDATA "../../build/intermediate/WebView2Loader.dll"
+IDR_APP_WASM   RCDATA "../../build/intermediate/app.wasm"
 
 // Version Information
 VS_VERSION_INFO VERSIONINFO

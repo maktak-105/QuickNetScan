@@ -1,38 +1,102 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
-    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#1e1e24"/>
-      <stop offset="100%" stop-color="#0e131f"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1e2836"/>
+      <stop offset="1" stop-color="#080b10"/>
     </linearGradient>
-    <linearGradient id="accentGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#00d2ff"/>
-      <stop offset="100%" stop-color="#007acc"/>
+    <linearGradient id="ringBlue" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5cb4ff"/>
+      <stop offset="1" stop-color="#1f66ff"/>
     </linearGradient>
-    <linearGradient id="glowGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#56ccf2"/>
-      <stop offset="100%" stop-color="#2f80ed"/>
+    <linearGradient id="nodeTeal" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#4df0c8"/>
+      <stop offset="1" stop-color="#0e9f86"/>
     </linearGradient>
+    <linearGradient id="nodeBlue" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6cc2ff"/>
+      <stop offset="1" stop-color="#1f66ff"/>
+    </linearGradient>
+    <linearGradient id="boltGold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffe270"/>
+      <stop offset="0.55" stop-color="#ff9f1a"/>
+      <stop offset="1" stop-color="#ff5f1a"/>
+    </linearGradient>
+    <linearGradient id="sweepGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#00d2ff" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#1f66ff" stop-opacity="0.0"/>
+    </linearGradient>
+    <filter id="shadow" x="-25%" y="-25%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="10" stdDeviation="9" flood-color="#000" flood-opacity="0.6"/>
+    </filter>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="12"/>
+    </filter>
   </defs>
-  <!-- Background Rounded Rect -->
-  <rect width="512" height="512" rx="100" fill="url(#bgGrad)"/>
-  <rect width="504" height="504" x="4" y="4" rx="96" fill="none" stroke="#333a4d" stroke-width="8"/>
-  
-  <!-- Radar / Network Rings -->
-  <circle cx="256" cy="256" r="180" fill="none" stroke="#25334d" stroke-width="4" stroke-dasharray="8 8"/>
-  <circle cx="256" cy="256" r="120" fill="none" stroke="#2c3e5e" stroke-width="5"/>
-  <circle cx="256" cy="256" r="60" fill="none" stroke="#364e77" stroke-width="6"/>
 
-  <!-- Network Nodes -->
-  <circle cx="256" cy="76" r="14" fill="#00d2ff"/>
-  <circle cx="436" cy="256" r="14" fill="#00d2ff"/>
-  <circle cx="256" cy="436" r="14" fill="#00d2ff"/>
-  <circle cx="76" cy="256" r="14" fill="#00d2ff"/>
+  <!-- Quick-series standard dark rounded-square background -->
+  <rect x="16" y="16" width="480" height="480" rx="108" fill="url(#bg)"/>
+  <rect x="17.5" y="17.5" width="477" height="477" rx="106.5" fill="none" stroke="#3a475c" stroke-opacity="0.75" stroke-width="3"/>
 
-  <circle cx="383" cy="129" r="10" fill="#4ec9b0"/>
-  <circle cx="383" cy="383" r="10" fill="#4ec9b0"/>
-  <circle cx="129" cy="383" r="10" fill="#4ec9b0"/>
-  <circle cx="129" cy="129" r="10" fill="#4ec9b0"/>
+  <!-- Subtle radar sweep sector -->
+  <path d="M256,256 L256,68 A188,188 0 0,1 430,184 Z" fill="url(#sweepGrad)"/>
 
-  <!-- Center Lightning Bolt (High Speed Goroutine Scan) -->
-  <polygon points="270,140 180,270 245,270 220,380 340,240 275,240" fill="url(#accentGrad)" filter="drop-shadow(0px 0px 12px rgba(0,210,255,0.6))"/>
+  <!-- Ambient glow behind radar rings & lightning -->
+  <g filter="url(#glow)" opacity="0.65">
+    <circle cx="256" cy="256" r="176" fill="none" stroke="#1f66ff" stroke-width="10"/>
+    <circle cx="256" cy="256" r="114" fill="none" stroke="#14c9a4" stroke-width="10"/>
+    <polygon points="284,96 164,268 246,268 216,416 356,236 272,236" fill="#ff8a1f"/>
+  </g>
+
+  <!-- Radar concentric rings & crosshairs -->
+  <circle cx="256" cy="256" r="180" fill="none" stroke="url(#ringBlue)" stroke-width="8" stroke-opacity="0.85"/>
+  <circle cx="256" cy="256" r="118" fill="none" stroke="#4df0c8" stroke-width="6" stroke-opacity="0.75" stroke-dasharray="18 12"/>
+  <circle cx="256" cy="256" r="58" fill="none" stroke="#5cb4ff" stroke-width="5" stroke-opacity="0.6"/>
+
+  <!-- Network connection lines -->
+  <g stroke="#5cb4ff" stroke-width="5" stroke-opacity="0.55" stroke-linecap="round">
+    <line x1="256" y1="76" x2="394" y2="142"/>
+    <line x1="394" y1="142" x2="436" y2="256"/>
+    <line x1="76" y1="256" x2="132" y2="386"/>
+    <line x1="132" y1="386" x2="256" y2="436"/>
+    <line x1="128" y1="130" x2="256" y2="76"/>
+  </g>
+
+  <!-- Discovered network nodes with 3D shadow and specular highlights -->
+  <g filter="url(#shadow)">
+    <!-- Top node -->
+    <circle cx="256" cy="76" r="22" fill="url(#nodeBlue)"/>
+    <ellipse cx="256" cy="67" rx="12" ry="5" fill="#fff" fill-opacity="0.45"/>
+
+    <!-- Right node -->
+    <circle cx="436" cy="256" r="22" fill="url(#nodeTeal)"/>
+    <ellipse cx="436" cy="247" rx="12" ry="5" fill="#fff" fill-opacity="0.45"/>
+
+    <!-- Bottom node -->
+    <circle cx="256" cy="436" r="22" fill="url(#nodeBlue)"/>
+    <ellipse cx="256" cy="427" rx="12" ry="5" fill="#fff" fill-opacity="0.45"/>
+
+    <!-- Left node -->
+    <circle cx="76" cy="256" r="22" fill="url(#nodeTeal)"/>
+    <ellipse cx="76" cy="247" rx="12" ry="5" fill="#fff" fill-opacity="0.45"/>
+
+    <!-- Diagonal nodes -->
+    <circle cx="394" cy="142" r="18" fill="url(#nodeTeal)"/>
+    <ellipse cx="394" cy="135" rx="10" ry="4" fill="#fff" fill-opacity="0.45"/>
+
+    <circle cx="128" cy="130" r="17" fill="url(#nodeBlue)"/>
+    <ellipse cx="128" cy="123" rx="9" ry="4" fill="#fff" fill-opacity="0.45"/>
+
+    <circle cx="132" cy="386" r="18" fill="url(#nodeTeal)"/>
+    <ellipse cx="132" cy="379" rx="10" ry="4" fill="#fff" fill-opacity="0.45"/>
+
+    <circle cx="386" cy="382" r="17" fill="url(#nodeBlue)"/>
+    <ellipse cx="386" cy="375" rx="9" ry="4" fill="#fff" fill-opacity="0.45"/>
+  </g>
+
+  <!-- Central Quick Lightning Bolt -->
+  <g filter="url(#shadow)">
+    <polygon points="284,92 160,268 246,268 214,420 360,234 272,234" fill="url(#boltGold)" stroke="#fff3b0" stroke-width="4" stroke-linejoin="round"/>
+    <!-- Inner specular highlight -->
+    <polygon points="276,114 178,256 244,256 254,218" fill="#ffffff" fill-opacity="0.38"/>
+  </g>
 </svg>

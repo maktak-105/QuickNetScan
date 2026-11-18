@@ -90,89 +90,8 @@ func (s *AppServer) Close() error {
 	return s.server.Close()
 }
 
-type SubnetInfo struct {
-	Name      string `json:"name"`
-	IP        string `json:"ip"`
-	CIDR      string `json:"cidr"`
-	Label     string `json:"label"`
-	IsDefault bool   `json:"is_default"`
-	Priority  int    `json:"priority"`
-}
-
 func (s *AppServer) handleLocalSubnets(w http.ResponseWriter, r *http.Request) {
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	var subnets []SubnetInfo
-	for _, iface := range ifaces {
-		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
-			continue
-		}
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, addr := range addrs {
-			ipNet, ok := addr.(*net.IPNet)
-			if !ok || ipNet.IP.To4() == nil {
-				continue
-			}
-
-			ip := ipNet.IP.To4()
-			ones, _ := ipNet.Mask.Size()
-			networkIP := ip.Mask(ipNet.Mask)
-			cidr := fmt.Sprintf("%s/%d", networkIP.String(), ones)
-
-			priority := 50
-			nameLower := strings.ToLower(iface.Name)
-
-			// Deprioritize APIPA and single-host /32
-			if ip[0] == 169 && ip[1] == 254 {
-				priority = 5
-			} else if ones == 32 {
-				priority = 10
-			} else if strings.Contains(nameLower, "tailscale") || strings.Contains(nameLower, "vpn") {
-				priority = 20
-			} else if strings.Contains(nameLower, "wsl") || strings.Contains(nameLower, "veth") || strings.Contains(nameLower, "hyper-v") {
-				priority = 30
-			} else if strings.Contains(nameLower, "wi-fi") || strings.Contains(nameLower, "wifi") || strings.Contains(nameLower, "イーサネット") || strings.Contains(nameLower, "ethernet") {
-				// Prioritize real LAN adapters
-				priority = 100
-			} else if ip[0] == 192 && ip[1] == 168 {
-				priority = 90
-			} else if ip[0] == 172 && (ip[1] >= 16 && ip[1] <= 31) {
-				priority = 85
-			} else if ip[0] == 10 {
-				priority = 80
-			}
-
-			label := fmt.Sprintf("%s (%s - %s)", iface.Name, cidr, ip.String())
-			subnets = append(subnets, SubnetInfo{
-				Name:     iface.Name,
-				IP:       ip.String(),
-				CIDR:     cidr,
-				Label:    label,
-				Priority: priority,
-			})
-		}
-	}
-
-	// Sort by priority descending
-	for i := 0; i < len(subnets)-1; i++ {
-		for j := i + 1; j < len(subnets); j++ {
-			if subnets[j].Priority > subnets[i].Priority {
-				subnets[i], subnets[j] = subnets[j], subnets[i]
-			}
-		}
-	}
-
-	if len(subnets) > 0 {
-		subnets[0].IsDefault = true
-	}
-
+	subnets := engine.GetLocalSubnets()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"subnets": subnets,
@@ -209,7 +128,7 @@ func (s *AppServer) handleScanStart(w http.ResponseWriter, r *http.Request) {
 
 	ips, err := engine.GenerateIPsFromCIDR(req.TargetCIDR)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("invalid CIDR: %v", err), http.StatusBadRequest)
+		http.Error(w, fmt.Sprintf("invalid CIDR/IP range: %v", err), http.StatusBadRequest)
 		return
 	}
 
@@ -226,13 +145,17 @@ func (s *AppServer) handleScanStart(w http.ResponseWriter, r *http.Request) {
 		Ports:        portList,
 		Concurrency:  req.Concurrency,
 		ScanPorts:    req.ScanPorts,
-		Timeout:      1200 * time.Millisecond,
-		PingTimeout:  400 * time.Millisecond,
+		Timeout:      500 * time.Millisecond,
+		PingTimeout:  300 * time.Millisecond,
 		ResolveNames: false,
 	}
 
 	scanner := engine.NewScanner(opts)
-	progressChan := make(chan engine.ProgressUpdate, 100)
+	bufSize := len(ips) + 32
+	if bufSize > 4096 {
+		bufSize = 4096
+	}
+	progressChan := make(chan engine.ProgressUpdate, bufSize)
 
 	go func() {
 		defer close(progressChan)
@@ -271,7 +194,7 @@ func (s *AppServer) handleScanEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	ch := make(chan engine.ProgressUpdate, 50)
+	ch := make(chan engine.ProgressUpdate, 512)
 	s.mu.Lock()
 	s.progressSubs = append(s.progressSubs, ch)
 	s.mu.Unlock()

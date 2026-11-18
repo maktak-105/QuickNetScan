@@ -8,15 +8,20 @@
 #include <shobjidl.h>
 
 #include <iostream>
+#include <fstream>
 #include <string>
 #include <vector>
 #include <mutex>
 #include <atomic>
 #include <functional>
+#include <cstdarg>
 
 #define WM_POST_JSON (WM_APP + 1)
 #define IDI_ICON1 101
 #define IDR_INDEX_HTML 201
+#define IDR_ENGINE_DLL 202
+#define IDR_WV2_LOADER 203
+#define IDR_APP_WASM   204
 
 // Go Engine DLL function pointer types
 typedef char* (*GetSubnetsJSONFn)();
@@ -31,9 +36,22 @@ static StopScanEngineFn g_pfnStopScan = nullptr;
 static FreeCStringFn g_pfnFreeCString = nullptr;
 
 static FILE* g_log = nullptr;
+static std::wstring g_logPath;
+static std::wstring g_userDataFolder;
+
 static void LOG(const char* fmt, ...) {
     if (!g_log) {
-        g_log = fopen("C:\\Users\\0120025-Z100\\source\\project\\Quicknetscan\\dist\\debug.log", "w");
+        if (g_logPath.empty()) {
+            wchar_t exePath[MAX_PATH] = {0};
+            GetModuleFileNameW(NULL, exePath, MAX_PATH);
+            g_logPath = exePath;
+            size_t slash = g_logPath.find_last_of(L"\\/");
+            if (slash != std::wstring::npos) g_logPath.resize(slash + 1);
+            g_logPath += L"QuickNetScan_debug.log";
+        }
+        char path[MAX_PATH * 3] = {0};
+        WideCharToMultiByte(CP_UTF8, 0, g_logPath.c_str(), -1, path, sizeof(path), NULL, NULL);
+        g_log = fopen(path, "w");
     }
     if (g_log) {
         va_list args;
@@ -44,10 +62,10 @@ static void LOG(const char* fmt, ...) {
         va_end(args);
     }
 }
+
 static HWND g_hWnd = nullptr;
 static ICoreWebView2* g_pWebView = nullptr;
 static ICoreWebView2Controller* g_pController = nullptr;
-static std::mutex g_postLock;
 
 // WebView2 loader typedef
 typedef HRESULT (STDAPICALLTYPE *CreateEnvFn)(
@@ -132,38 +150,106 @@ public:
     }
 };
 
+static std::wstring Utf8ToWide(const std::string& str) {
+    if (str.empty()) return L"";
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), NULL, 0);
+    if (wlen <= 0) return L"";
+    std::wstring wstr(wlen, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, str.data(), (int)str.size(), &wstr[0], wlen);
+    return wstr;
+}
+
+static std::string WideToUtf8(const std::wstring& wstr) {
+    if (wstr.empty()) return "";
+    int len = WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(), NULL, 0, NULL, NULL);
+    if (len <= 0) return "";
+    std::string str(len, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wstr.data(), (int)wstr.size(), &str[0], len, NULL, NULL);
+    return str;
+}
+
+static std::wstring JsonEscape(const std::wstring& value) {
+    std::wstring escaped;
+    escaped.reserve(value.size());
+    for (wchar_t ch : value) {
+        switch (ch) {
+            case L'\\': escaped += L"\\\\"; break;
+            case L'"':  escaped += L"\\\""; break;
+            case L'\n': escaped += L"\\n";  break;
+            case L'\r': escaped += L"\\r";  break;
+            case L'\t': escaped += L"\\t";  break;
+            default:    escaped += ch;      break;
+        }
+    }
+    return escaped;
+}
+
 static void PostJsonToUI(const std::wstring& jsonStr) {
     if (g_hWnd) {
         wchar_t* msgCopy = _wcsdup(jsonStr.c_str());
-        PostMessageW(g_hWnd, WM_POST_JSON, 0, (LPARAM)msgCopy);
+        if (!PostMessageW(g_hWnd, WM_POST_JSON, 0, (LPARAM)msgCopy)) {
+            free(msgCopy);
+        }
     }
 }
 
 // Callback invoked by Go Engine Goroutines
 static void OnProgressFromGo(const char* jsonUpdate) {
     if (!jsonUpdate) return;
-    int len = MultiByteToWideChar(CP_UTF8, 0, jsonUpdate, -1, NULL, 0);
-    if (len > 0) {
-        std::wstring wstr(len, 0);
-        MultiByteToWideChar(CP_UTF8, 0, jsonUpdate, -1, &wstr[0], len);
-        wstr.resize(len - 1);
+    std::wstring wstr = Utf8ToWide(jsonUpdate);
+    if (!wstr.empty()) {
         std::wstring wrapped = L"{\"cmd\":\"progress\",\"data\":" + wstr + L"}";
         PostJsonToUI(wrapped);
     }
 }
 
-static bool LoadGoEngine() {
-    wchar_t exePath[MAX_PATH];
-    GetModuleFileNameW(NULL, exePath, MAX_PATH);
-    wchar_t* pSlash = wcsrchr(exePath, L'\\');
-    if (pSlash) *(pSlash + 1) = L'\0';
-    std::wstring dllPath = std::wstring(exePath) + L"engine_x64.dll";
+// Load embedded UTF-8 resource as UTF-16 wstring for NavigateToString
+static std::wstring LoadEmbeddedHtmlString() {
+    HRSRC hRes = FindResourceW(NULL, MAKEINTRESOURCEW(IDR_INDEX_HTML), (LPCWSTR)RT_RCDATA);
+    if (!hRes) return L"";
+    HGLOBAL hGlobal = LoadResource(NULL, hRes);
+    if (!hGlobal) return L"";
+    DWORD size = SizeofResource(NULL, hRes);
+    const char* pData = (const char*)LockResource(hGlobal);
+    if (!pData || size == 0) return L"";
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, pData, (int)size, NULL, 0);
+    if (wlen <= 0) return L"";
+    std::wstring wstr(wlen, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, pData, (int)size, &wstr[0], wlen);
+    return wstr;
+}
 
+// Extract an embedded RCDATA resource to a file on disk
+static bool ExtractResourceToFile(int resourceId, const std::wstring& destPath) {
+    HRSRC hRes = FindResourceW(NULL, MAKEINTRESOURCEW(resourceId), (LPCWSTR)RT_RCDATA);
+    if (!hRes) return false;
+    HGLOBAL hGlobal = LoadResource(NULL, hRes);
+    if (!hGlobal) return false;
+    DWORD size = SizeofResource(NULL, hRes);
+    const void* pData = LockResource(hGlobal);
+    if (!pData || size == 0) return false;
+
+    HANDLE hFile = CreateFileW(destPath.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) return false;
+    DWORD written = 0;
+    BOOL ok = WriteFile(hFile, pData, size, &written, NULL);
+    CloseHandle(hFile);
+    return (ok && written == size);
+}
+
+static bool LoadGoEngine(const std::wstring& exeDir, const std::wstring& fallbackDir) {
+    std::wstring dllPath = exeDir + L"engine_x64.dll";
     g_hEngineDll = LoadLibraryW(dllPath.c_str());
     if (!g_hEngineDll) {
-        // Try core/native/engine_x64.dll
-        dllPath = std::wstring(exePath) + L"core\\native\\engine_x64.dll";
+        dllPath = exeDir + L"core\\native\\engine_x64.dll";
         g_hEngineDll = LoadLibraryW(dllPath.c_str());
+    }
+    if (!g_hEngineDll && !fallbackDir.empty()) {
+        std::wstring extractedDll = fallbackDir + L"\\engine_x64.dll";
+        if (ExtractResourceToFile(IDR_ENGINE_DLL, extractedDll)) {
+            LOG("[Engine] Extracted embedded engine_x64.dll to %ls", extractedDll.c_str());
+            g_hEngineDll = LoadLibraryW(extractedDll.c_str());
+        }
     }
     if (!g_hEngineDll) return false;
 
@@ -175,79 +261,180 @@ static bool LoadGoEngine() {
     return (g_pfnGetSubnets && g_pfnStartScan && g_pfnStopScan);
 }
 
-static std::string GetStringProp(const std::string& json, const std::string& key) {
-    std::string search = "\"" + key + "\":\"";
-    size_t pos = json.find(search);
-    if (pos == std::string::npos) return "";
-    size_t start = pos + search.length();
-    size_t end = json.find("\"", start);
-    if (end == std::string::npos) return "";
-    return json.substr(start, end - start);
+static bool ExtractJsonString(const std::wstring& json, const std::wstring& key, std::wstring& out) {
+    std::wstring needle = L"\"" + key + L"\"";
+    size_t pos = json.find(needle);
+    if (pos == std::wstring::npos) return false;
+    pos = json.find(L':', pos + needle.size());
+    if (pos == std::wstring::npos) return false;
+    pos = json.find_first_not_of(L" \t\r\n", pos + 1);
+    if (pos == std::wstring::npos || json[pos] != L'"') return false;
+    ++pos;
+
+    std::wstring result;
+    while (pos < json.size() && json[pos] != L'"') {
+        wchar_t ch = json[pos];
+        if (ch == L'\\' && pos + 1 < json.size()) {
+            wchar_t next = json[pos + 1];
+            switch (next) {
+                case L'"':  result += L'"';  pos += 2; break;
+                case L'\\': result += L'\\'; pos += 2; break;
+                case L'/':  result += L'/';  pos += 2; break;
+                case L'n':  result += L'\n'; pos += 2; break;
+                case L'r':  result += L'\r'; pos += 2; break;
+                case L't':  result += L'\t'; pos += 2; break;
+                case L'u':
+                    if (pos + 6 <= json.size()) {
+                        wchar_t code = (wchar_t)wcstol(json.substr(pos + 2, 4).c_str(), nullptr, 16);
+                        result += code;
+                        pos += 6;
+                    } else {
+                        result += ch; ++pos;
+                    }
+                    break;
+                default: result += next; pos += 2; break;
+            }
+        } else {
+            result += ch;
+            ++pos;
+        }
+    }
+    out = result;
+    return true;
 }
 
-static int GetIntProp(const std::string& json, const std::string& key, int defaultVal) {
-    std::string search = "\"" + key + "\":";
-    size_t pos = json.find(search);
-    if (pos == std::string::npos) return defaultVal;
-    size_t start = pos + search.length();
-    while (start < json.length() && (json[start] == ' ' || json[start] == '\t')) start++;
+static int ExtractJsonInt(const std::wstring& json, const std::wstring& key, int defaultVal) {
+    std::wstring needle = L"\"" + key + L"\"";
+    size_t pos = json.find(needle);
+    if (pos == std::wstring::npos) return defaultVal;
+    pos = json.find(L':', pos + needle.size());
+    if (pos == std::wstring::npos) return defaultVal;
+    pos = json.find_first_not_of(L" \t\r\n", pos + 1);
+    if (pos == std::wstring::npos) return defaultVal;
     try {
-        return std::stoi(json.substr(start));
+        return std::stoi(json.substr(pos));
     } catch (...) {
         return defaultVal;
     }
 }
 
-static bool GetBoolProp(const std::string& json, const std::string& key, bool defaultVal) {
-    std::string search = "\"" + key + "\":";
-    size_t pos = json.find(search);
-    if (pos == std::string::npos) return defaultVal;
-    size_t start = pos + search.length();
-    if (json.substr(start, 4) == "true") return true;
-    if (json.substr(start, 5) == "false") return false;
+static bool ExtractJsonBool(const std::wstring& json, const std::wstring& key, bool defaultVal) {
+    std::wstring needle = L"\"" + key + L"\"";
+    size_t pos = json.find(needle);
+    if (pos == std::wstring::npos) return defaultVal;
+    pos = json.find(L':', pos + needle.size());
+    if (pos == std::wstring::npos) return defaultVal;
+    pos = json.find_first_not_of(L" \t\r\n", pos + 1);
+    if (pos == std::wstring::npos) return defaultVal;
+    if (json.compare(pos, 4, L"true") == 0) return true;
+    if (json.compare(pos, 5, L"false") == 0) return false;
     return defaultVal;
+}
+
+static void HandleExportCsv(const std::wstring& csvContent) {
+    IFileSaveDialog* pSave = nullptr;
+    HRESULT hr = CoCreateInstance(CLSID_FileSaveDialog, NULL, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&pSave));
+    if (FAILED(hr) || !pSave) return;
+
+    COMDLG_FILTERSPEC rgSpec[] = {
+        { L"CSV Files (*.csv)", L"*.csv" },
+        { L"All Files (*.*)", L"*.*" }
+    };
+    pSave->SetFileTypes(ARRAYSIZE(rgSpec), rgSpec);
+    pSave->SetFileTypeIndex(1);
+    pSave->SetDefaultExtension(L"csv");
+    pSave->SetFileName(L"quicknetscan_results.csv");
+
+    std::wstring savedPath;
+    bool ok = false;
+    if (SUCCEEDED(pSave->Show(g_hWnd))) {
+        IShellItem* pItem = nullptr;
+        if (SUCCEEDED(pSave->GetResult(&pItem)) && pItem) {
+            PWSTR pszFilePath = nullptr;
+            if (SUCCEEDED(pItem->GetDisplayName(SIGDN_FILESYSPATH, &pszFilePath)) && pszFilePath) {
+                savedPath = pszFilePath;
+                CoTaskMemFree(pszFilePath);
+            }
+            pItem->Release();
+        }
+    }
+    pSave->Release();
+
+    if (savedPath.empty()) return;
+
+    std::string utf8 = "\xEF\xBB\xBF" + WideToUtf8(csvContent);
+    HANDLE hFile = CreateFileW(savedPath.c_str(), GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        BOOL wOk = WriteFile(hFile, utf8.data(), (DWORD)utf8.size(), &written, NULL);
+        ok = (wOk && written == (DWORD)utf8.size());
+        CloseHandle(hFile);
+    }
+
+    std::wstring resp = L"{\"cmd\":\"export_result\",\"success\":" + std::wstring(ok ? L"true" : L"false")
+                      + L",\"path\":\"" + JsonEscape(savedPath) + L"\"}";
+    PostJsonToUI(resp);
 }
 
 static void HandleWebMessage(const std::wstring& msgW) {
     if (msgW.empty()) return;
     try {
         LOG("[MSG] HandleWebMessage received: %ls", msgW.c_str());
-        int len = WideCharToMultiByte(CP_UTF8, 0, msgW.c_str(), (int)msgW.length(), NULL, 0, NULL, NULL);
-        if (len <= 0) return;
-        std::string msg(len, '\0');
-        WideCharToMultiByte(CP_UTF8, 0, msgW.c_str(), (int)msgW.length(), &msg[0], len, NULL, NULL);
 
-        std::string cmd = GetStringProp(msg, "cmd");
-        LOG("[MSG] Parsed cmd: %s", cmd.c_str());
+        std::wstring cmd;
+        if (!ExtractJsonString(msgW, L"cmd", cmd)) {
+            ExtractJsonString(msgW, L"type", cmd);
+        }
+        LOG("[MSG] Parsed cmd: %ls", cmd.c_str());
 
-        if (cmd == "get_subnets") {
+        if (cmd == L"ping") {
+            PostJsonToUI(L"{\"type\":\"pong\",\"cmd\":\"pong\"}");
+        } else if (cmd == L"get_subnets") {
             if (g_pfnGetSubnets) {
                 char* pJson = g_pfnGetSubnets();
+                LOG("[MSG] g_pfnGetSubnets returned: %s", pJson ? pJson : "NULL");
                 if (pJson) {
-                    int wlen = MultiByteToWideChar(CP_UTF8, 0, pJson, -1, NULL, 0);
-                    if (wlen > 1) {
-                        std::wstring wsubnets(wlen - 1, L'\0');
-                        MultiByteToWideChar(CP_UTF8, 0, pJson, -1, &wsubnets[0], wlen);
+                    std::wstring wsubnets = Utf8ToWide(pJson);
+                    if (!wsubnets.empty()) {
                         std::wstring resp = L"{\"cmd\":\"subnets_result\",\"subnets\":" + wsubnets + L"}";
                         PostJsonToUI(resp);
                     }
                     if (g_pfnFreeCString) g_pfnFreeCString(pJson);
                 }
             }
-        } else if (cmd == "start_scan") {
-            std::string cidr = GetStringProp(msg, "target_cidr");
-            std::string ports = GetStringProp(msg, "ports");
-            int concurrency = GetIntProp(msg, "concurrency", 256);
-            bool scanPorts = GetBoolProp(msg, "scan_ports", true);
+        } else if (cmd == L"start_scan") {
+            std::wstring cidrW, portsW;
+            ExtractJsonString(msgW, L"target_cidr", cidrW);
+            ExtractJsonString(msgW, L"ports", portsW);
+            int concurrency = ExtractJsonInt(msgW, L"concurrency", 256);
+            bool scanPorts = ExtractJsonBool(msgW, L"scan_ports", true);
 
-            LOG("[MSG] start_scan on %s with %d threads", cidr.c_str(), concurrency);
+            std::string cidr = WideToUtf8(cidrW);
+            std::string ports = WideToUtf8(portsW);
+
+            LOG("[MSG] start_scan on %s with %d threads (scanPorts=%d)", cidr.c_str(), concurrency, scanPorts ? 1 : 0);
             if (g_pfnStartScan) {
-                g_pfnStartScan(cidr.c_str(), ports.c_str(), concurrency, scanPorts ? 1 : 0, OnProgressFromGo);
+                int totalTargets = g_pfnStartScan(cidr.c_str(), ports.c_str(), concurrency, scanPorts ? 1 : 0, OnProgressFromGo);
+                LOG("[MSG] StartScanEngine returned totalTargets=%d", totalTargets);
+                if (totalTargets < 0) {
+                    std::wstring werr = L"{\"cmd\":\"scan_error\",\"error\":\"" + JsonEscape(cidrW) + L"\"}";
+                    PostJsonToUI(werr);
+                } else {
+                    std::wstring wstarted = L"{\"cmd\":\"scan_started\",\"total_targets\":" + std::to_wstring(totalTargets) + L"}";
+                    PostJsonToUI(wstarted);
+                }
+            } else {
+                PostJsonToUI(L"{\"cmd\":\"scan_error\",\"error\":\"Engine DLL not loaded\"}");
             }
-        } else if (cmd == "stop_scan") {
+        } else if (cmd == L"stop_scan") {
             LOG("[MSG] stop_scan requested");
             if (g_pfnStopScan) {
                 g_pfnStopScan();
+            }
+        } else if (cmd == L"export_csv") {
+            std::wstring csvW;
+            if (ExtractJsonString(msgW, L"csv", csvW)) {
+                HandleExportCsv(csvW);
             }
         }
     } catch (const std::exception& ex) {
@@ -255,21 +442,6 @@ static void HandleWebMessage(const std::wstring& msgW) {
     } catch (...) {
         LOG("[EXC] HandleWebMessage unknown exception");
     }
-}
-
-static std::wstring LoadEmbeddedHTML() {
-    HRSRC hRes = FindResourceW(NULL, MAKEINTRESOURCEW(IDR_INDEX_HTML), (LPCWSTR)RT_RCDATA);
-    if (!hRes) return L"";
-    HGLOBAL hGlobal = LoadResource(NULL, hRes);
-    if (!hGlobal) return L"";
-    DWORD size = SizeofResource(NULL, hRes);
-    const char* pData = (const char*)LockResource(hGlobal);
-    if (!pData || size == 0) return L"";
-
-    int wlen = MultiByteToWideChar(CP_UTF8, 0, pData, size, NULL, 0);
-    std::wstring html(wlen, 0);
-    MultiByteToWideChar(CP_UTF8, 0, pData, size, &html[0], wlen);
-    return html;
 }
 
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -286,7 +458,10 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
         wchar_t* pJson = (wchar_t*)lParam;
         if (pJson) {
             if (g_pWebView) {
-                g_pWebView->PostWebMessageAsJson(pJson);
+                HRESULT hrPost = g_pWebView->PostWebMessageAsJson(pJson);
+                if (FAILED(hrPost)) {
+                    LOG("[ERR] PostWebMessageAsJson failed: 0x%08X", (unsigned)hrPost);
+                }
             }
             free(pJson);
         }
@@ -295,23 +470,45 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 
     case WM_DESTROY:
         if (g_pfnStopScan) g_pfnStopScan();
-        if (g_pController) g_pController->Close();
+        if (g_pController) {
+            g_pController->Close();
+            g_pController->Release();
+            g_pController = nullptr;
+        }
+        if (g_pWebView) {
+            g_pWebView->Release();
+            g_pWebView = nullptr;
+        }
         PostQuitMessage(0);
         return 0;
     }
     return DefWindowProcW(hWnd, msg, wParam, lParam);
 }
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int) {
     LOG("[0] Program start");
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
     OleInitialize(NULL);
+    SetProcessDPIAware();
+
+    wchar_t exeDir[MAX_PATH] = {0};
+    GetModuleFileNameW(NULL, exeDir, MAX_PATH);
+    wchar_t* pSep = wcsrchr(exeDir, L'\\');
+    if (pSep) *(pSep + 1) = L'\0';
+
+    // Initialize WebView2 with app-specific user data folder
+    wchar_t tempPath[MAX_PATH] = {0};
+    GetTempPathW(MAX_PATH, tempPath);
+    g_userDataFolder = std::wstring(tempPath) + L"QuickNetScan_WVData";
+    CreateDirectoryW(g_userDataFolder.c_str(), NULL);
+    LOG("[userDataFolder] %ls", g_userDataFolder.c_str());
 
     LOG("[2] Loading Go Engine...");
-    bool engineOk = LoadGoEngine();
+    bool engineOk = LoadGoEngine(exeDir, g_userDataFolder);
     LOG("[3] LoadGoEngine result: %d", engineOk);
 
     WNDCLASSEXW wc = { sizeof(wc) };
+    wc.style = CS_HREDRAW | CS_VREDRAW;
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = L"QuickNetScanWindowClass";
@@ -329,7 +526,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     );
 
     if (!g_hWnd) {
-        LOG("[ERR] CreateWindowExW failed: %d", GetLastError());
+        LOG("[ERR] CreateWindowExW failed: %lu", GetLastError());
         return 1;
     }
     LOG("[5] Window created: %p", (void*)g_hWnd);
@@ -342,30 +539,34 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     UpdateWindow(g_hWnd);
     SetForegroundWindow(g_hWnd);
 
-    // Initialize WebView2 with process-unique user data folder to prevent 0x800700AA lock
-    wchar_t tempPath[MAX_PATH];
-    GetTempPathW(MAX_PATH, tempPath);
-    std::wstring userDataFolder = std::wstring(tempPath) + L"QuickNetScan_WV_" + std::to_wstring(GetCurrentProcessId());
-    CreateDirectoryW(userDataFolder.c_str(), NULL);
-    LOG("[userDataFolder] %ls", userDataFolder.c_str());
+    // Prepare embedded HTML in memory and app.wasm on disk
+    std::wstring htmlContent = LoadEmbeddedHtmlString();
+    std::wstring uiHostDir = g_userDataFolder + L"\\ui";
+    CreateDirectoryW(uiHostDir.c_str(), NULL);
+    std::wstring embeddedWasmFile = uiHostDir + L"\\app.wasm";
+    bool wasmExtracted = ExtractResourceToFile(IDR_APP_WASM, embeddedWasmFile);
+    LOG("[5-1] Loaded embedded HTML (%zu chars) and extracted WASM (%d) to %ls", htmlContent.size(), wasmExtracted, uiHostDir.c_str());
 
-    wchar_t exeDir[MAX_PATH];
-    GetModuleFileNameW(NULL, exeDir, MAX_PATH);
-    wchar_t* pSep = wcsrchr(exeDir, L'\\');
-    if (pSep) *(pSep + 1) = L'\0';
     std::wstring loaderPath = std::wstring(exeDir) + L"WebView2Loader.dll";
     LOG("[6] Loading WebView2Loader: %ls", loaderPath.c_str());
     HMODULE hLoader = LoadLibraryW(loaderPath.c_str());
     if (!hLoader) hLoader = LoadLibraryW(L"WebView2Loader.dll");
+    if (!hLoader) {
+        std::wstring extractedLoader = g_userDataFolder + L"\\WebView2Loader.dll";
+        if (ExtractResourceToFile(IDR_WV2_LOADER, extractedLoader)) {
+            LOG("[6-1] Extracted embedded WebView2Loader.dll to %ls", extractedLoader.c_str());
+            hLoader = LoadLibraryW(extractedLoader.c_str());
+        }
+    }
     LOG("[7] hLoader: %p", (void*)hLoader);
 
     CreateEnvFn createEnv = hLoader ? (CreateEnvFn)GetProcAddress(hLoader, "CreateCoreWebView2EnvironmentWithOptions") : nullptr;
     LOG("[8] createEnv: %p", (void*)createEnv);
 
-    auto onEnvCreated = [](HRESULT hr, ICoreWebView2Environment* env) -> HRESULT {
+    auto onEnvCreated = [uiHostDir, htmlContent](HRESULT hr, ICoreWebView2Environment* env) -> HRESULT {
         LOG("[9] onEnvCreated: hr=0x%08X, env=%p", (unsigned)hr, (void*)env);
         if (FAILED(hr) || !env) return hr;
-        env->CreateCoreWebView2Controller(g_hWnd, new ControllerCompletedHandler([](HRESULT hr2, ICoreWebView2Controller* controller) -> HRESULT {
+        env->CreateCoreWebView2Controller(g_hWnd, new ControllerCompletedHandler([uiHostDir, htmlContent](HRESULT hr2, ICoreWebView2Controller* controller) -> HRESULT {
             LOG("[10] onControllerCreated: hr=0x%08X, ctrl=%p", (unsigned)hr2, (void*)controller);
             if (FAILED(hr2) || !controller) {
                 wchar_t errBuf[256];
@@ -411,32 +612,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
             }), &token);
             LOG("[10-4] WebMessage handler registered");
 
-            wchar_t exeDir[MAX_PATH];
-            GetModuleFileNameW(NULL, exeDir, MAX_PATH);
-            wchar_t* pSep = wcsrchr(exeDir, L'\\');
-            if (pSep) *(pSep + 1) = L'\0';
-            std::wstring webDir = std::wstring(exeDir) + L"web";
-            LOG("[10-5] webDir: %ls", webDir.c_str());
-
             ICoreWebView2_3* webview3 = nullptr;
             HRESULT hrQI = g_pWebView->QueryInterface(IID_ICoreWebView2_3, (void**)&webview3);
-            LOG("[10-6] QueryInterface ICoreWebView2_3: hr=0x%08X, ptr=%p", (unsigned)hrQI, (void*)webview3);
-
             if (SUCCEEDED(hrQI) && webview3) {
-                HRESULT hrMap = webview3->SetVirtualHostNameToFolderMapping(
+                webview3->SetVirtualHostNameToFolderMapping(
                     L"quicknetscan.local",
-                    webDir.c_str(),
+                    uiHostDir.c_str(),
                     COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW
                 );
-                LOG("[10-7] SetVirtualHostNameToFolderMapping: hr=0x%08X", (unsigned)hrMap);
                 webview3->Release();
-                HRESULT hrNav = g_pWebView->Navigate(L"https://quicknetscan.local/index.html");
-                LOG("[10-8] Navigate: hr=0x%08X", (unsigned)hrNav);
-            } else {
-                std::wstring fileUrl = L"file:///" + webDir + L"/index.html";
-                LOG("[10-9] Navigate to fileUrl: %ls", fileUrl.c_str());
-                g_pWebView->Navigate(fileUrl.c_str());
             }
+
+            HRESULT hrNav = g_pWebView->NavigateToString(htmlContent.c_str());
+            LOG("[10-8] NavigateToString: hr=0x%08X (%zu chars)", (unsigned)hrNav, htmlContent.size());
             LOG("[10-10] Done setup");
             return S_OK;
         }));
@@ -445,7 +633,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
 
     if (createEnv) {
         LOG("[11] Calling createEnv...");
-        HRESULT hrEnv = createEnv(nullptr, userDataFolder.c_str(), nullptr, new EnvCompletedHandler(onEnvCreated));
+        HRESULT hrEnv = createEnv(nullptr, g_userDataFolder.c_str(), nullptr, new EnvCompletedHandler(onEnvCreated));
         LOG("[12] createEnv returned: 0x%08X", (unsigned)hrEnv);
     } else {
         LOG("[ERR] createEnv is NULL!");
@@ -461,5 +649,6 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
 
     if (g_hEngineDll) FreeLibrary(g_hEngineDll);
     if (hLoader) FreeLibrary(hLoader);
+    if (g_log) fclose(g_log);
     return (int)msg.wParam;
 }

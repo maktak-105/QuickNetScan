@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import base64
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -10,13 +10,32 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 WASM_SRC = ROOT_DIR / "web" / "cmd" / "wasm"
 INTER_DIR = ROOT_DIR / "build" / "intermediate"
 WASM_BIN = INTER_DIR / "app.wasm"
-OUT_JS = ROOT_DIR / "web" / "static" / "js" / "wasm_data.js"
+STATIC_WASM = ROOT_DIR / "web" / "static" / "app.wasm"
+WASM_EXEC_JS = ROOT_DIR / "web" / "static" / "js" / "wasm_exec.js"
+
+def sync_wasm_exec_js(go_bin):
+    try:
+        res = subprocess.run([go_bin, "env", "GOROOT"], capture_output=True, text=True, check=True)
+        goroot = Path(res.stdout.strip())
+        candidates = [
+            goroot / "lib" / "wasm" / "wasm_exec.js",
+            goroot / "misc" / "wasm" / "wasm_exec.js",
+        ]
+        for cand in candidates:
+            if cand.exists():
+                shutil.copy2(cand, WASM_EXEC_JS)
+                print(f"[WASM] Synced wasm_exec.js from {cand}")
+                return
+    except Exception as e:
+        print(f"[WASM] Note: Could not sync wasm_exec.js from GOROOT: {e}")
 
 def main():
     INTER_DIR.mkdir(parents=True, exist_ok=True)
     go_bin = r"C:\Program Files\Go\bin\go.exe"
     if not os.path.exists(go_bin):
-        go_bin = "go"
+        go_bin = shutil.which("go") or "go"
+
+    sync_wasm_exec_js(go_bin)
 
     print("[WASM] Compiling Go to WebAssembly...")
     env = os.environ.copy()
@@ -28,16 +47,8 @@ def main():
         print("[ERROR] WASM build failed")
         sys.exit(res.returncode)
 
-    print(f"[WASM] Encoding {WASM_BIN} to Base64 in {OUT_JS}...")
-    with open(WASM_BIN, "rb") as f:
-        wasm_bytes = f.read()
-
-    b64_str = base64.b64encode(wasm_bytes).decode("ascii")
-    with open(OUT_JS, "w", encoding="utf-8") as f:
-        f.write("// Auto-generated: Embedded Go WebAssembly binary (Zero HTTP Server required)\n")
-        f.write(f'const GO_WASM_BASE64 = "{b64_str}";\n')
-
-    print("[WASM] Embedding complete! Total size: {:.2f} MB".format(len(b64_str) / (1024 * 1024)))
+    shutil.copy2(WASM_BIN, STATIC_WASM)
+    print("[WASM] Build complete! Binary size: {:.2f} MB".format(WASM_BIN.stat().st_size / (1024 * 1024)))
 
 if __name__ == "__main__":
     main()
